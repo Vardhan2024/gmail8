@@ -56,6 +56,33 @@ Email_swipe/
 - npm or yarn
 - Expo CLI (`npm install -g @expo/cli`)
 - iOS Simulator (for iOS development)
+- Google Cloud Console account (for OAuth setup)
+
+### Google OAuth Setup
+
+1. **Create a Google Cloud Project**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+
+2. **Enable Gmail API**:
+   - Navigate to "APIs & Services" > "Library"
+   - Search for "Gmail API" and enable it
+
+3. **Create OAuth 2.0 Credentials**:
+   - Go to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "OAuth 2.0 Client IDs"
+   - Choose "Web application" as the application type
+   - Add authorized redirect URIs:
+     - `http://localhost:3000/` (for local development)
+     - `https://your-domain.vercel.app/` (for production)
+   - Copy the Client ID and Client Secret
+
+4. **Set Environment Variables**:
+   Create a `.env` file in the root directory:
+   ```
+   GOOGLE_CLIENT_ID=your_google_client_id_here
+   GOOGLE_CLIENT_SECRET=your_google_client_secret_here
+   ```
 
 ### Installation
 
@@ -151,17 +178,18 @@ Adjust swipe sensitivity and animations in `src/components/Card.tsx`:
 const SWIPE_THRESHOLD = screenWidth * 0.25; // Adjust swipe sensitivity
 ```
 
-## Frontend Only
+## Features
 
-This version is **frontend-only** and includes:
+This version includes:
 
 - ✅ Complete UI interface
-- ✅ Mock email data
+- ✅ Google OAuth integration for Gmail access
+- ✅ Real Gmail API integration
 - ✅ Swipe animations and gestures
 - ✅ Rich reply interface
 - ✅ Label management system
-- ✅ No backend dependencies
-- ✅ No authentication required
+- ✅ AWS backend support (optional)
+- ✅ Cross-platform (iOS, Android, Web)
 
 ## Troubleshooting
 
