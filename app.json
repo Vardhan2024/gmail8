@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Email Swipe",
+    "slug": "email-swipe",
+    "sdkVersion": "53.0.0",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.emailsswipe.app",
+      "infoPlist": {
+                    "CFBundleURLTypes": [
+                {
+                    "CFBundleURLName": "email-swipe",
+                    "CFBundleURLSchemes": ["email-swipe"]
+                },
+                {
+                    "CFBundleURLName": "oauth-callback",
+                    "CFBundleURLSchemes": ["email-swipe"]
+                }
+            ]
+      }
+    },
+    "android": {
+      "package": "com.emailsswipe.app"
+    },
+            "web": {
+        },
+        "scheme": "email-swipe",
+        "plugins": [
+            "expo-web-browser"
+        ]
+  }
+}

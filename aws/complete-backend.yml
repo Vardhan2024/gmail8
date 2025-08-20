@@ -1,0 +1,324 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Email Swipe Complete Backend - DynamoDB, Lambda, and API Gateway'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+Resources:
+  # DynamoDB Table for storing emails
+  EmailTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'email-swipe-emails-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: messageId
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: messageId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: UserTimestampIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # Lambda function to store emails
+  StoreEmailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'email-swipe-store-email-${Environment}'
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          
+          exports.handler = async (event) => {
+            try {
+              const { userId, emails } = JSON.parse(event.body);
+              
+              if (!userId || !emails || !Array.isArray(emails)) {
+                return {
+                  statusCode: 400,
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ error: 'Invalid input' })
+                };
+              }
+              
+              const timestamp = Date.now();
+              const batchWrites = emails.map(email => ({
+                PutRequest: {
+                  Item: {
+                    userId,
+                    messageId: email.id,
+                    timestamp,
+                    subject: email.subject,
+                    sender: email.sender,
+                    snippet: email.snippet,
+                    date: email.date,
+                    labels: email.labels || [],
+                    isRead: email.isRead || false,
+                    threadId: email.threadId
+                  }
+                }
+              }));
+              
+              // Split into chunks of 25 (DynamoDB batch limit)
+              const chunks = [];
+              for (let i = 0; i < batchWrites.length; i += 25) {
+                chunks.push(batchWrites.slice(i, i + 25));
+              }
+              
+              for (const chunk of chunks) {
+                await dynamodb.batchWrite({
+                  RequestItems: {
+                    [process.env.EMAIL_TABLE]: chunk
+                  }
+                }).promise();
+              }
+              
+              return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  message: 'Emails stored successfully',
+                  count: emails.length 
+                })
+              };
+            } catch (error) {
+              console.error('Error:', error);
+              return {
+                statusCode: 500,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ error: 'Internal server error' })
+              };
+            }
+          };
+      Environment:
+        Variables:
+          EMAIL_TABLE: !Ref EmailTable
+
+  # Lambda function to fetch emails
+  FetchEmailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'email-swipe-fetch-emails-${Environment}'
+      Runtime: nodejs18.x
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          
+          exports.handler = async (event) => {
+            try {
+              const { userId, limit = 50, startKey } = JSON.parse(event.body);
+              
+              if (!userId) {
+                return {
+                  statusCode: 400,
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ error: 'userId is required' })
+                };
+              }
+              
+              const params = {
+                TableName: process.env.EMAIL_TABLE,
+                IndexName: 'UserTimestampIndex',
+                KeyConditionExpression: 'userId = :userId',
+                ExpressionAttributeValues: {
+                  ':userId': userId
+                },
+                ScanIndexForward: false, // Most recent first
+                Limit: parseInt(limit)
+              };
+              
+              if (startKey) {
+                params.ExclusiveStartKey = startKey;
+              }
+              
+              const result = await dynamodb.query(params).promise();
+              
+              const emails = result.Items.map(item => ({
+                id: item.messageId,
+                subject: item.subject,
+                sender: item.sender,
+                snippet: item.snippet,
+                date: item.date,
+                labels: item.labels,
+                isRead: item.isRead,
+                threadId: item.threadId
+              }));
+              
+              return {
+                statusCode: 200,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  emails,
+                  lastEvaluatedKey: result.LastEvaluatedKey
+                })
+              };
+            } catch (error) {
+              console.error('Error:', error);
+              return {
+                statusCode: 500,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ error: 'Internal server error' })
+              };
+            }
+          };
+      Environment:
+        Variables:
+          EMAIL_TABLE: !Ref EmailTable
+
+  # Lambda execution role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource: 
+                  - !GetAtt EmailTable.Arn
+                  - !Sub '${EmailTable.Arn}/index/*'
+
+  # API Gateway
+  EmailApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'email-swipe-api-${Environment}'
+      Description: 'Email Swipe API'
+
+  # API Gateway Resources
+  EmailsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmailApi
+      ParentId: !GetAtt EmailApi.RootResourceId
+      PathPart: 'emails'
+
+  # Store Email Method
+  StoreEmailMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmailApi
+      ResourceId: !Ref EmailsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreEmailFunction.Arn}/invocations'
+      RequestParameters:
+        method.request.header.Content-Type: true
+
+  # Fetch Emails Method
+  FetchEmailsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmailApi
+      ResourceId: !Ref EmailsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FetchEmailFunction.Arn}/invocations'
+      RequestParameters:
+        method.request.querystring.userId: true
+
+  # Lambda permissions for API Gateway
+  StoreEmailPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StoreEmailFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmailApi}/*/POST/emails'
+
+  FetchEmailsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FetchEmailFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmailApi}/*/GET/emails'
+
+  # API Gateway Deployment
+  EmailApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - StoreEmailMethod
+      - FetchEmailsMethod
+    Properties:
+      RestApiId: !Ref EmailApi
+      StageName: !Ref Environment
+
+Outputs:
+  EmailTableName:
+    Description: 'DynamoDB table name for emails'
+    Value: !Ref EmailTable
+    Export:
+      Name: !Sub '${AWS::StackName}-EmailTableName'
+
+  StoreEmailFunctionArn:
+    Description: 'Lambda function ARN for storing emails'
+    Value: !GetAtt StoreEmailFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-StoreEmailFunctionArn'
+
+  FetchEmailFunctionArn:
+    Description: 'Lambda function ARN for fetching emails'
+    Value: !GetAtt FetchEmailFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FetchEmailFunctionArn'
+
+  ApiGatewayId:
+    Description: 'API Gateway ID'
+    Value: !Ref EmailApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayId'
+
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${EmailApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'

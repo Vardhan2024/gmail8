@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Email Swipe API Gateway Configuration'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    Description: Environment name
+  EmailApiId:
+    Type: String
+    Description: API Gateway ID from the main stack
+  StoreEmailFunctionArn:
+    Type: String
+    Description: Store Email Lambda Function ARN
+  FetchEmailFunctionArn:
+    Type: String
+    Description: Fetch Email Lambda Function ARN
+
+Resources:
+  # API Gateway Resources
+  EmailsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref EmailApiId
+      ParentId: !GetAtt EmailApiId.RootResourceId
+      PathPart: 'emails'
+
+  # Store Email Method
+  StoreEmailMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmailApiId
+      ResourceId: !Ref EmailsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StoreEmailFunctionArn}/invocations'
+      RequestParameters:
+        method.request.header.Content-Type: true
+
+  # Fetch Emails Method
+  FetchEmailsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref EmailApiId
+      ResourceId: !Ref EmailsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FetchEmailFunctionArn}/invocations'
+      RequestParameters:
+        method.request.querystring.userId: true
+
+  # Lambda permissions for API Gateway
+  StoreEmailPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StoreEmailFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmailApiId}/*/POST/emails'
+
+  FetchEmailsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FetchEmailFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${EmailApiId}/*/GET/emails'
+
+  # API Gateway Deployment
+  EmailApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - StoreEmailMethod
+      - FetchEmailsMethod
+    Properties:
+      RestApiId: !Ref EmailApiId
+      StageName: !Ref Environment
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${EmailApiId}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
